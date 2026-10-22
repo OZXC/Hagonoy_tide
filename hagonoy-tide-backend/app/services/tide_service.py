@@ -1,6 +1,13 @@
-from datetime import date
-from app.data.hagonoy_tides import HAGONOY_TIDES
+
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+import httpx
+
+from openwaters import fetch_extremes, fetch_timeline
 from app.models.tide import TideEvent, TideLocation, TideDayResponse
+
+PH_TIMEZONE = ZoneInfo("Asia/Manila")
 
 HAGONOY_LOCATION = TideLocation(
     id="hagonoy",
@@ -10,20 +17,49 @@ HAGONOY_LOCATION = TideLocation(
 )
 
 
-def get_tides_for_date(target_date: str) -> TideDayResponse:
-    raw_events = HAGONOY_TIDES.get(target_date)
-    if raw_events is None:
-        raise ValueError(f"No tide data for {target_date}")
+async def get_tides_for_date(target_date: str) -> TideDayResponse:
+    try:
+        parsed_date = date.fromisoformat(target_date)
+    except ValueError as exc:
+        raise ValueError("Date must use YYYY-MM-DD format") from exc
 
-    events = [TideEvent(**e) for e in raw_events]
+    try:
+        payload = await fetch_extremes(parsed_date)
+        events = [
+            TideEvent(**event)
+            for event in payload["events"]
+        ]
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            "Unable to retrieve tide predictions from OpenWaters."
+        ) from exc
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "OpenWaters returned an unexpected tide response."
+        ) from exc
+
     return TideDayResponse(
         location=HAGONOY_LOCATION,
-        date=target_date,
+        date=parsed_date.isoformat(),
         timezone="Asia/Manila",
         events=events,
     )
 
 
-def get_today_tides() -> TideDayResponse:
-    today_str = date.today().isoformat()
-    return get_tides_for_date(today_str)
+async def get_today_tides() -> TideDayResponse:
+    today = datetime.now(PH_TIMEZONE).date()
+    return await get_tides_for_date(today.isoformat())
+
+
+async def get_timeline_for_date(target_date: str) -> dict:
+    try:
+        parsed_date = date.fromisoformat(target_date)
+    except ValueError as exc:
+        raise ValueError("Date must use YYYY-MM-DD format") from exc
+
+    try:
+        return await fetch_timeline(parsed_date)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            "Unable to retrieve the water-level timeline from OpenWaters."
+        ) from exc

@@ -1,67 +1,139 @@
-const API_BASE_URL = "http://192.168.100.4:8000"; // use YOUR IP from step 1
+
+const API_BASE_URL = "http://192.168.100.4:8000";
 
 export type TideExtreme = {
+  type: "HIGH" | "LOW";
   time: string;
-  type: "high" | "low";
   height: number;
 };
 
-type BackendTideEvent = {
-  type: "HIGH" | "LOW";
+type TideApiResponse = {
+  location: {
+    id: string;
+    name: string;
+    province: string;
+    country: string;
+  };
+  date: string;
+  timezone: string;
+  events: {
+    type: "HIGH" | "LOW";
+    time: string;
+    height_m: number;
+  }[];
+};
+
+export type TideTimelinePoint = {
   time: string;
   height_m: number;
 };
 
-type BackendResponse = {
+type TideTimelineResponse = {
   date: string;
-  events: BackendTideEvent[];
+  timeline: TideTimelinePoint[];
 };
 
-function toTideExtreme(dateStr: string, event: BackendTideEvent): TideExtreme {
-  return {
-    time: `${dateStr}T${event.time}:00`,
-    type: event.type === "HIGH" ? "high" : "low",
-    height: event.height_m,
-  };
+export function getManilaDate(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const get = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-export async function fetchTodayTides(): Promise<TideExtreme[]> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/tides/hagonoy/today`);
-  if (!response.ok) {
-    throw new Error("Failed to fetch tide data from backend");
-  }
-  const data: BackendResponse = await response.json();
-  return data.events.map((e) => toTideExtreme(data.date, e));
+export function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const result = new Date(Date.UTC(year, month - 1, day + days));
+
+  return [
+    result.getUTCFullYear(),
+    String(result.getUTCMonth() + 1).padStart(2, "0"),
+    String(result.getUTCDate()).padStart(2, "0"),
+  ].join("-");
 }
 
-export function getCurrentNormalizedHeight(extremes: TideExtreme[]): number {
-  if (extremes.length === 0) return 0.5;
-
-  const sorted = [...extremes].sort(
-    (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime()
+export async function fetchTodayTides(
+  date: string = getManilaDate()
+): Promise<TideExtreme[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/tides/hagonoy?date=${date}`
   );
 
-  const heights = sorted.map((e) => e.height);
-  const min = Math.min(...heights);
-  const max = Math.max(...heights);
-  const range = max - min || 1;
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tides: ${response.status}`);
+  }
 
-  const now = Date.now();
-  const first = sorted[0];
-  const last = sorted[sorted.length - 1];
+  const data: TideApiResponse = await response.json();
 
-  if (now <= new Date(first.time).getTime()) return (first.height - min) / range;
-  if (now >= new Date(last.time).getTime()) return (last.height - min) / range;
+  return data.events.map((event) => ({
+    type: event.type,
+    time: event.time,
+    height: event.height_m,
+  }));
+}
 
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const t0 = new Date(sorted[i].time).getTime();
-    const t1 = new Date(sorted[i + 1].time).getTime();
-    if (now >= t0 && now <= t1) {
-      const frac = (now - t0) / (t1 - t0);
-      const eased = (1 - Math.cos(frac * Math.PI)) / 2;
-      const h = sorted[i].height + (sorted[i + 1].height - sorted[i].height) * eased;
-      return (h - min) / range;
+export async function fetchTodayTimeline(
+  date: string = getManilaDate()
+): Promise<TideTimelinePoint[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/tides/hagonoy/timeline?date=${date}`
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch tide timeline: ${response.status}`
+    );
+  }
+
+  const data: TideTimelineResponse = await response.json();
+
+  return data.timeline;
+}
+
+export function getCurrentPredictedLevel(
+  timeline: TideTimelinePoint[],
+  now: Date = new Date()
+): number | null {
+  const targetTime = now.getTime();
+
+  const validPoints = timeline
+    .map((point) => ({
+      ...point,
+      timestamp: new Date(point.time).getTime(),
+    }))
+    .filter((point) => Number.isFinite(point.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (validPoints.length === 0) {
+    return null;
+  }
+
+  let closest = validPoints[0];
+  let closestDifference = Math.abs(
+    closest.timestamp - targetTime
+  );
+
+  for (const point of validPoints.slice(1)) {
+    const difference = Math.abs(
+      point.timestamp - targetTime
+    );
+
+    if (difference < closestDifference) {
+      closest = point;
+      closestDifference = difference;
     }
   }
-  return 0.5;
+
+  // Don't present an old or distant reading as the current level.
+  if (closestDifference > 90 * 60 * 1000) {
+    return null;
+  }
+
+  return closest.height_m;
 }
