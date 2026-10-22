@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
-import { fetchTodayTides, type TideExtreme } from "./lib/tide";
+import { fetchTodayTides, getCurrentNormalizedHeight, type TideExtreme } from "./lib/tide";
+import TideList from "./components/TideList";
+import WaveAnimation from "./components/WaveAnimation";
 
 export default function App() {
   const [extremes, setExtremes] = useState<TideExtreme[]>([]);
@@ -10,14 +12,14 @@ export default function App() {
   useEffect(() => {
     fetchTodayTides()
       .then(setExtremes)
-      .catch(() => setError("Could not reach the backend. Is it running?"))
+      .catch(() => setError("Could not load tides. Is the backend running?"))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#1d6e63" />
       </View>
     );
   }
@@ -30,24 +32,21 @@ export default function App() {
     );
   }
 
+  const level = getCurrentNormalizedHeight(extremes);
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Hagonoy Tides</Text>
-      {extremes.map((e, i) => (
-        <Text key={i} style={styles.row}>
-          {e.type.toUpperCase()}{"   "}
-          {new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          {"   "}
-          {e.height.toFixed(1)} m
-        </Text>
-      ))}
+      <Text style={styles.subtitle}>Hagonoy, Bulacan</Text>
+      <WaveAnimation level={level} />
+      <TideList extremes={extremes} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 80, paddingHorizontal: 24 },
+  container: { flex: 1, backgroundColor: "#faf9f6", paddingTop: 70 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  title: { fontSize: 24, fontWeight: "700", marginBottom: 16 },
-  row: { fontSize: 16, marginBottom: 8 },
+  title: { fontSize: 26, fontWeight: "700", textAlign: "center", color: "#16232b" },
+  subtitle: { textAlign: "center", color: "#4c5b63", marginBottom: 16 },
 });
